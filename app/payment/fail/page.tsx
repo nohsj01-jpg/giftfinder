@@ -1,12 +1,12 @@
 "use client";
 
-import React, { useEffect } from "react";
+import React, { useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertCircle, ArrowLeft } from "lucide-react";
 import { useCart } from "@/context/CartContext";
 import Header from "@/components/Header";
 
-export default function PaymentFailPage() {
+function PaymentFailContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { showToast } = useCart();
@@ -76,3 +76,16 @@ export default function PaymentFailPage() {
     </div>
   );
 }
+
+export default function PaymentFailPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 dark:bg-zinc-950 dark:text-zinc-50 font-sans justify-center items-center">
+        <div className="w-10 h-10 border-4 border-rose-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <PaymentFailContent />
+    </Suspense>
+  );
+}
+

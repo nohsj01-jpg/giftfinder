@@ -1,13 +1,13 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { CheckCircle2, AlertTriangle, ArrowRight } from "lucide-react";
 import { useCart } from "@/context/CartContext";
 import Header from "@/components/Header";
 import { createClient } from "@/lib/supabase/client";
 
-export default function PaymentSuccessPage() {
+function PaymentSuccessContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { clearCart, showToast, user } = useCart();
@@ -202,5 +202,17 @@ export default function PaymentSuccessPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function PaymentSuccessPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 dark:bg-zinc-950 dark:text-zinc-50 font-sans justify-center items-center">
+        <div className="w-10 h-10 border-4 border-violet-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <PaymentSuccessContent />
+    </Suspense>
   );
 }
