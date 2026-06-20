@@ -22,9 +22,9 @@ export default function ResultPage() {
   const LOADING_STEPS = [
     { label: "답변 데이터 분석 및 해독", desc: "상대방의 취미, 성격, 추가 요청 및 관계 특성을 정밀 분석합니다.", icon: "📝" },
     { label: "선물 데이터베이스 매칭", desc: "300여 개의 등록된 선물 리스트에서 예산 및 프로필 조건에 맞는 후보군을 선별합니다.", icon: "🔍" },
-    { label: "가중치 점수 및 랭킹 정렬", desc: "교집합 관심사 점수(취미 +10점, 성격 +8점)를 합산하여 최종 상위 5대 상품을 결정합니다.", icon: "📊" },
+    { label: "가중치 점수 및 랭킹 정렬", desc: "교집합 관심사 점수(취미 +10점, 성격 +8점)를 합산하여 최종 상위 3대 상품을 결정합니다.", icon: "📊" },
     { label: "Gemini AI 맞춤 코멘트 생성", desc: "Gemini AI가 카테고리와 취향을 매끄럽게 연결한 따뜻한 한글 추천사를 일괄 생성합니다.", icon: "🤖" },
-    { label: "최적의 5대 추천 목록 구성 완료", desc: "맞춤형 이미지 매칭 및 해시태그 패키징을 마치고 추천 결과를 출력합니다.", icon: "🎁" }
+    { label: "최적의 3대 추천 목록 구성 완료", desc: "맞춤형 이미지 매칭 및 해시태그 패키징을 마치고 추천 결과를 출력합니다.", icon: "🎁" }
   ];
 
   // 로딩 시뮬레이션 및 실제 데이터 완료 조건 바인딩
@@ -345,7 +345,7 @@ export default function ResultPage() {
               AI 추천 선물 리스트
             </h1>
             <p className="text-sm text-slate-500 dark:text-zinc-400">
-              작성해주신 설문 답변을 바탕으로 AI가 선정한 5가지 추천 목록입니다.
+              작성해주신 설문 답변을 바탕으로 AI가 선정한 {recommendations.length || 3}가지 추천 목록입니다.
             </p>
           </div>
         )}
@@ -369,7 +369,7 @@ export default function ResultPage() {
                     선물 분석 및 취향 큐레이션
                   </h3>
                   <p className="text-xs text-slate-400 dark:text-zinc-500 mt-1">
-                    질문 답변을 토대로 최적의 상품 5가지를 매칭하고 있습니다.
+                    질문 답변을 토대로 최적의 상품 3가지를 매칭하고 있습니다.
                   </p>
                 </div>
 
@@ -438,7 +438,7 @@ export default function ResultPage() {
 
             {/* 1-2. 배경으로 보이는 흐릿한 스켈레톤 리스트 */}
             <div className="space-y-6 blur-xs pointer-events-none opacity-40">
-              {[1, 2, 3, 4, 5].map((idx) => (
+              {[1, 2, 3].map((idx) => (
                 <div
                   key={idx}
                   className="flex flex-col sm:flex-row gap-6 p-6 rounded-3xl bg-white border border-slate-100 dark:bg-zinc-900 dark:border-zinc-900/50 animate-pulse"
