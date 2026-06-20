@@ -505,7 +505,7 @@ export default function ResultPage() {
 
                       {/* AI 코멘트 */}
                       <div className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-950 border border-slate-100 dark:border-zinc-800/40">
-                        <p className="text-sm text-slate-600 dark:text-zinc-300 leading-relaxed font-light">
+                        <p className="text-sm text-slate-600 dark:text-zinc-300 leading-relaxed font-light whitespace-pre-line">
                           <span className="font-semibold text-violet-600 dark:text-violet-400 mr-1.5">
                             AI 코멘트
                           </span>

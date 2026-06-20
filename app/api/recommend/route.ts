@@ -43,23 +43,16 @@ export async function POST(req: NextRequest) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // [1단계 쿼리] 가장 엄격한 조건으로 1차 필터링
-    console.log("🔍 [1단계 쿼리] 엄격 조건 검색 시작...");
-    const { data: rawRows, error: dbError } = await supabase
+    // [1단계 쿼리] 사용자가 선택한 예산(budget) 및 이벤트(event) 필터를 적용하여 조회
+    console.log("🔍 [1단계] 예산 및 이벤트 필터 검색 시작...");
+    let { data: rawRows, error: dbError } = await supabase
       .from("giftfinder")
       .select("*")
       .eq("가격", surveyData.budget)
-      .in("추천 성별", [surveyData.gender, "상관없음"])
-      .eq("추천 연령대", surveyData.age_group)
-      .like("추천 관계", `%${surveyData.relationship}%`)
       .or(`"추천 이벤트".ilike.%${surveyData.event}%,"추천 이벤트".ilike.%"특별한 이유 없음"%`);
 
     if (dbError) {
       console.error("❌ Supabase 1단계 Query Error:", dbError.message);
-      return NextResponse.json(
-        { error: `상품 조회 오류: ${dbError.message}` },
-        { status: 500 }
-      );
     }
 
     let products: Product[] = [];
@@ -68,134 +61,96 @@ export async function POST(req: NextRequest) {
       console.log(`✅ [1단계 성공] ${products.length}개 매칭 완료.`);
     }
 
-    // [2단계 쿼리] 관계/이벤트 조건 완화하여 예산, 성별, 연령대 3종 필터로 재조회
-    if (products.length === 0) {
-      console.log("⚠️ [2단계 쿼리] 검색 결과 0개. 관계/이벤트 필터 제거 후 재조회...");
+    // [2단계 쿼리] 결과가 부족한 경우 이벤트 조건 없이 예산(budget)만으로 필터링하여 풀 확대
+    if (products.length < 10) {
+      console.log("⚠️ 1단계 조회 상품 수가 부족하여 2단계 예산 필터 단독 검색을 시도합니다...");
       try {
-        const { data: looseRows, error: looseError } = await supabase
+        const { data: looseRows } = await supabase
           .from("giftfinder")
           .select("*")
-          .eq("가격", surveyData.budget)
-          .in("추천 성별", [surveyData.gender, "상관없음"])
-          .eq("추천 연령대", surveyData.age_group);
-
-        if (!looseError && looseRows && looseRows.length > 0) {
-          products = looseRows.map(mapDbToProduct);
-          console.log(`✅ [2단계 성공] ${products.length}개 매칭 완료.`);
+          .eq("가격", surveyData.budget);
+        
+        if (looseRows && looseRows.length > 0) {
+          const looseProducts = looseRows.map(mapDbToProduct);
+          const existingNames = new Set(products.map(p => p.name));
+          looseProducts.forEach(lp => {
+            if (!existingNames.has(lp.name)) {
+              products.push(lp);
+            }
+          });
         }
       } catch (e) {
-        console.error("❌ [2단계 쿼리] 예외 발생:", e);
+        console.error("❌ 2단계 검색 예외:", e);
       }
     }
 
-    // [3단계 쿼리] 예산 구간 한 단계 확장하여 넓은 검색
-    if (products.length === 0) {
-      console.log(`⚠️ [3단계 쿼리] 검색 결과 0개. 예산 범위 [${surveyData.budget}] 확장 재시도...`);
-      const budgetStages = ["1만원 이하", "1~3만원", "3~5만원", "5~10만원", "10만원 이상"];
-      const currentIndex = budgetStages.indexOf(surveyData.budget);
-      const expandedBudgets = [surveyData.budget];
-
-      if (currentIndex > 0) {
-        expandedBudgets.push(budgetStages[currentIndex - 1]);
-      }
-      if (currentIndex < budgetStages.length - 1) {
-        expandedBudgets.push(budgetStages[currentIndex + 1]);
-      }
-
+    // [3단계 쿼리] 여전히 부족할 경우 전체 DB 상품 병합
+    if (products.length < 10) {
+      console.log("⚠️ 상품 수가 부족하여 전체 상품을 로드하여 병합합니다...");
       try {
-        const { data: retryRows, error: retryError } = await supabase
+        const { data: fallbackRows } = await supabase
           .from("giftfinder")
           .select("*")
-          .in("가격", expandedBudgets)
-          .in("추천 성별", [surveyData.gender, "상관없음"])
-          .eq("추천 연령대", surveyData.age_group);
-
-        if (!retryError && retryRows && retryRows.length > 0) {
-          products = retryRows.map(mapDbToProduct);
-          console.log(`✅ [3단계 성공] ${products.length}개의 상품 발견.`);
+          .limit(50);
+        if (fallbackRows) {
+          const fallbackProducts = fallbackRows.map(mapDbToProduct);
+          const existingNames = new Set(products.map(p => p.name));
+          fallbackProducts.forEach(fp => {
+            if (!existingNames.has(fp.name)) {
+              products.push(fp);
+            }
+          });
         }
-      } catch (retryException) {
-        console.error("❌ [3단계 쿼리] 예외 발생:", retryException);
+      } catch (e) {
+        console.error("❌ 3단계 백업 검색 예외:", e);
       }
     }
 
-    // [4단계 쿼리] 최후 수단: 데이터베이스에서 30개 전체 무작위 로드
-    if (products.length === 0) {
-      console.log("⚠️ [4단계 쿼리] 확장 재검색도 실패하여 전체 DB 백업 로드합니다.");
-      try {
-        const { data: fallbackRows, error: fallbackError } = await supabase
-          .from("giftfinder")
-          .select("*")
-          .limit(30);
+    // 2. 가중치 기반 스코어 매칭 및 동점 처리 랭킹 정렬 실행 (관리자 탭 설정 가중치 반영)
+    const ranked = rankProducts(products, surveyData);
+    const top10 = ranked.slice(0, 10);
 
-        if (fallbackError || !fallbackRows) {
-          console.error("❌ DB가 완전히 비어있거나 연결 끊김.");
-          return NextResponse.json(
-            { error: "상품 데이터베이스가 비어있습니다." },
-            { status: 404 }
-          );
-        }
-        products = fallbackRows.map(mapDbToProduct);
-        console.log(`✅ [4단계 성공] 무작위 백업 ${products.length}개 로드 완료.`);
-      } catch (dbException) {
-        console.error("❌ [4단계 쿼리] 예외 발생:", dbException);
-        return NextResponse.json(
-          { error: "데이터베이스 연결에 완전히 실패했습니다." },
-          { status: 500 }
-        );
-      }
-    }
-
-    // 2. 가중치 기반 스코어 매칭 및 동점 처리 랭킹 정렬 실행
-    const top5Products = rankProducts(products, surveyData);
-    const top5 = top5Products.slice(0, 5);
-
-
-    // 3. AI 기반 추천사(멘트) 일괄 생성 프로세스
+    // 3. AI 기반 추천사(멘트) 생성 프로세스
     const aiClient = getGoogleGenAIClient();
     let recommendations: Recommendation[] = [];
 
     if (aiClient) {
       try {
-        // 매칭된 키워드 정보 추출 (hobbies & personality 교집합 추출)
-        const top5WithKeywords = top5.map((prod) => {
-          const matchedHobbies = prod.hobbies.filter((h) => surveyData.hobbies.includes(h));
-          const matchedPersonality = prod.personality.filter((p) => surveyData.personality.includes(p));
-          const matchedKeywords = [...matchedHobbies, ...matchedPersonality];
-          return {
-            name: prod.name,
-            category: prod.category,
-            price: `${prod.price.toLocaleString()}원`,
-            matchedKeywords: matchedKeywords.length > 0 ? matchedKeywords : ["기본 맞춤"],
-          };
-        });
-
         const prompt = `
-          사용자의 설문 및 매칭 키워드를 바탕으로 아래 5개 상품에 대해 각각 1~2문장의 자연스럽고 따뜻한 추천 멘트와 관련 태그 3개를 생성해 주세요.
-          
-          [사용자 설문 정보]
-          - 받는 분과의 관계: ${surveyData.relationship}
-          - 성별: ${surveyData.gender}
-          - 연령대: ${surveyData.age_group}
-          - 예산 범위: ${surveyData.budget}
-          - 선물 목적(이벤트): ${surveyData.event}
-          - 추가 설명: ${surveyData.description || "없음"}
+          이제 사용자의 설문 데이터와 Supabase의 상품 데이터를 연결해서 Gemini AI 분석을 실행할 거야.
+          아래 [추천 후보 상품군] 중 사용자의 성향(취미, 성격, 자유 설명 등)에 가장 부합하는 3가지 선물을 선정해서 JSON 형식으로 출력해 줘.
 
-          [선정된 추천 상품 상세 및 매칭 키워드 리스트]
-          ${top5WithKeywords
+          [사용자 설문 정보]
+          - 관계: ${surveyData.relationship}
+          - 성별: ${surveyData.gender}
+          - 나이: ${surveyData.age_group}
+          - 예산: ${surveyData.budget}
+          - 이벤트: ${surveyData.event}
+          - 취미: ${surveyData.hobbies.join(", ") || "없음"}
+          - 성격: ${surveyData.personality.join(", ") || "없음"}
+          - 자유 설명: ${surveyData.description || "없음"}
+
+          [추천 후보 상품군 (최대 10개)]
+          ${top10
             .map(
               (p, i) =>
-                `${i + 1}. [상품명]: ${p.name} | [카테고리]: ${p.category} | [실제가격]: ${p.price} | [매칭된 키워드]: ${p.matchedKeywords.join(", ")}`
+                `${i + 1}. [상품명]: ${p.name} | [카테고리]: ${p.category} | [실제가격]: ${p.price.toLocaleString()}원 | [취미태그]: ${p.hobbies.join(", ")} | [성격태그]: ${p.personality.join(", ")}`
             )
             .join("\n")}
         `;
 
-        // 새 공식 @google/genai SDK 콘텐츠 생성 및 JSON 스키마 제어
         const response = await aiClient.models.generateContent({
-          model: "gemini-3.5-flash",
+          model: "gemini-2.5-flash",
           contents: prompt,
           config: {
-            systemInstruction: "친한 친구에게 선물을 추천해주는 큐레이터처럼, 광고 톤 없이 자연스럽고 다정한 한국어로 작성해 줘. 존댓말을 사용해 줘. 친근하지만 정중하게.",
+            systemInstruction: `
+              너는 10년 차 베테랑 선물 큐레이터이자 심리 분석가야. 사용자의 설문 데이터를 분석하여 가장 감동적인 선물을 추천하고, 그 이유를 논리적이고 감성적으로 설명해야 해.
+
+              Task:
+              1. 매칭 분석: 사용자가 입력한 '성격'과 '취미', '자유 설명'의 뉘앙스를 파악해 후보 상품 중 가장 적합한 3가지를 선정해.
+              2. 감성 멘트 작성 (ai_comment): 단순히 상품 정보만 나열하지 마. "카페를 좋아하고 감성이 풍부한 친구"라면, "지친 일상에 카페 같은 휴식을 선물해 보세요"와 같이 사용자의 상황에 완전히 몰입한 멘트를 정중하고 따뜻한 존댓말의 한국어로 작성해.
+              3. 데이터 기반 근거 (match_reason): 왜 이 상품을 추천했는지 설문 답변의 키워드(취미, 성격 등)를 1개 이상 반드시 인용하여 근거를 제시해.
+            `,
             responseMimeType: "application/json",
             responseSchema: {
               type: "OBJECT",
@@ -205,32 +160,13 @@ export async function POST(req: NextRequest) {
                   items: {
                     type: "OBJECT",
                     properties: {
-                      name: { type: "STRING", description: "리스트에 전달된 정확한 상품명" },
-                      recommendationComment: {
-                        type: "STRING",
-                        description: "상품 카테고리와 매칭 키워드, 그리고 사용자의 요구사항을 유기적으로 연결한 1~2문장의 자연스러운 추천 추천사",
-                      },
-                      tags: {
-                        type: "ARRAY",
-                        items: { type: "STRING" },
-                        description: "상품의 특징을 대변하는 해시태그 3개",
-                      },
-                      imageKeyword: {
-                        type: "STRING",
-                        enum: [
-                          "diffuser", "perfume", "mug", "diary", "mood_light", 
-                          "coffee_beans", "wireless_charger", "rug", "drone", 
-                          "charger", "speaker", "keyboard", "tumbler", "cookware", 
-                          "humidifier", "bag", "vitamins", "pj_set", "plant", 
-                          "tea_set", "hand_cream", "bath_bomb", "fountain_pen", 
-                          "desk_organizer", "wine_glasses", "candles", 
-                          "fitness_tracker", "backpack", "chocolate", "earbuds", 
-                          "clock", "monitor", "calendar", "cosmetics", "gift_box"
-                        ],
-                        description: "이 상품의 핵심 키워드를 가장 잘 나타내는 영어 단어 중 하나를 선택"
-                      }
+                      product_name: { type: "STRING", description: "후보 상품군 리스트에 전달된 정확한 상품명" },
+                      category: { type: "STRING", description: "상품의 카테고리" },
+                      price: { type: "STRING", description: "상품의 가격 (예: 25,000원)" },
+                      ai_comment: { type: "STRING", description: "사용자를 위한 감성적이고 따뜻한 추천 멘트" },
+                      match_reason: { type: "STRING", description: "취미, 성격 등 구체적 키워드를 1개 이상 인용한 추천 근거" }
                     },
-                    required: ["name", "recommendationComment", "tags", "imageKeyword"],
+                    required: ["product_name", "category", "price", "ai_comment", "match_reason"],
                   },
                 },
               },
@@ -247,35 +183,65 @@ export async function POST(req: NextRequest) {
         const parsed = JSON.parse(responseText);
         const aiList = parsed.recommendations || [];
 
-        recommendations = top5.map((prod) => {
-          // AI 응답 리스트에서 상품명 일치 또는 인덱스에 매칭되는 항목 찾기
-          const aiResult = aiList.find(
-            (item: any) =>
-              item.name === prod.name ||
-              (item.name && prod.name.includes(item.name)) ||
-              (item.name && item.name.includes(prod.name))
+        recommendations = aiList.map((item: any) => {
+          const originalProd = top10.find(
+            (p) =>
+              p.name === item.product_name ||
+              p.name.includes(item.product_name) ||
+              item.product_name.includes(p.name)
           );
 
+          const lowercaseName = (originalProd?.name || item.product_name).toLowerCase();
+          let keyword = "gift_box";
+          if (lowercaseName.includes("디퓨저") || lowercaseName.includes("아로마") || lowercaseName.includes("향수")) keyword = "diffuser";
+          else if (lowercaseName.includes("시계")) keyword = "clock";
+          else if (lowercaseName.includes("모니터")) keyword = "monitor";
+          else if (lowercaseName.includes("달력") || lowercaseName.includes("캘린더")) keyword = "calendar";
+          else if (lowercaseName.includes("크림") || lowercaseName.includes("에센스") || lowercaseName.includes("화장품") || lowercaseName.includes("세럼") || lowercaseName.includes("로션") || lowercaseName.includes("토너")) keyword = "cosmetics";
+          else if (lowercaseName.includes("다이어리") || lowercaseName.includes("저널") || lowercaseName.includes("플래너")) keyword = "diary";
+          else if (lowercaseName.includes("무드등") || lowercaseName.includes("조명") || lowercaseName.includes("스탠드") || lowercaseName.includes("캔들")) keyword = "mood_light";
+          else if (lowercaseName.includes("커피") || lowercaseName.includes("드립백") || lowercaseName.includes("원두")) keyword = "coffee_beans";
+          else if (lowercaseName.includes("거치대") || lowercaseName.includes("무선충전")) keyword = "wireless_charger";
+          else if (lowercaseName.includes("러그") || lowercaseName.includes("매트") || lowercaseName.includes("카페트") || lowercaseName.includes("담요")) keyword = "rug";
+          else if (lowercaseName.includes("드론") || lowercaseName.includes("무선")) keyword = "drone";
+          else if (lowercaseName.includes("멀티탭") || lowercaseName.includes("충전기") || lowercaseName.includes("보조배터리")) keyword = "charger";
+          else if (lowercaseName.includes("스피커") || lowercaseName.includes("헤드폰") || lowercaseName.includes("블루투스")) keyword = "speaker";
+          else if (lowercaseName.includes("키보드") || lowercaseName.includes("마우스")) keyword = "keyboard";
+          else if (lowercaseName.includes("텀블러") || lowercaseName.includes("물병") || lowercaseName.includes("컵")) keyword = "tumbler";
+          else if (lowercaseName.includes("조리기구") || lowercaseName.includes("접시") || lowercaseName.includes("도마")) keyword = "cookware";
+          else if (lowercaseName.includes("가습기") || lowercaseName.includes("공기청정기")) keyword = "humidifier";
+          else if (lowercaseName.includes("파우치") || lowercaseName.includes("가방") || lowercaseName.includes("지갑")) keyword = "bag";
+          else if (lowercaseName.includes("영양제") || lowercaseName.includes("비타민")) keyword = "vitamins";
+          else if (lowercaseName.includes("정리함") || lowercaseName.includes("오거나이저")) keyword = "desk_organizer";
+          else if (lowercaseName.includes("프린터") || lowercaseName.includes("포토프린터")) keyword = "printer";
+          else if (lowercaseName.includes("다트") || lowercaseName.includes("다트보드") || lowercaseName.includes("보드게임")) keyword = "darts";
+
+          const tags = [
+            originalProd ? originalProd.category.split("/")[0] : item.category.split("/")[0],
+            surveyData.relationship,
+            surveyData.event,
+          ];
+
           return {
-            id: prod.id.toString(),
-            name: prod.name,
-            category: prod.category,
-            price: `${prod.price.toLocaleString()}원`,
-            imageUrl: prod.image_url || undefined,
-            imageKeyword: aiResult?.imageKeyword || undefined,
-            recommendationComment:
-              aiResult?.recommendationComment ||
-              `${surveyData.relationship}님을 위한 특별한 ${prod.category} 선물로 아주 잘 어울립니다.`,
-            tags: aiResult?.tags || [prod.category, "맞춤선물", "추천"],
+            id: originalProd ? originalProd.id.toString() : item.product_name,
+            name: originalProd ? originalProd.name : item.product_name,
+            category: originalProd ? originalProd.category : item.category,
+            price: originalProd ? `${originalProd.price.toLocaleString()}원` : item.price,
+            imageUrl: originalProd?.image_url || undefined,
+            imageKeyword: keyword,
+            recommendationComment: `${item.ai_comment}\n\n💡 추천 근거: ${item.match_reason}`,
+            tags: tags,
           };
         });
       } catch (aiError) {
-        console.error("Gemini-3.5-flash batch API generation failed. Falling back to rules:", aiError);
-        recommendations = generateFallbackRecommendations(top5, surveyData);
+        console.error("Gemini batch API generation failed. Falling back to rules:", aiError);
+        const top3 = top10.slice(0, 3);
+        recommendations = generateFallbackRecommendations(top3, surveyData);
       }
     } else {
       console.log("No Gemini API Key found. Using fallback generator.");
-      recommendations = generateFallbackRecommendations(top5, surveyData);
+      const top3 = top10.slice(0, 3);
+      recommendations = generateFallbackRecommendations(top3, surveyData);
     }
 
     return NextResponse.json(recommendations);
